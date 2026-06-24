@@ -260,7 +260,7 @@ export default function ProcessDetailPage() {
               value={search}
               onChange={(e) => setSearch(e.target.value)}
             />
-            {isConsultant && (
+            {(user?.role === "consultant" || user?.role === "assistant") && (
               <button onClick={() => setShowDoc(true)} className="text-sm bg-brand-600 hover:bg-brand-700 text-white px-3 py-1.5 rounded shrink-0">New document</button>
             )}
           </div>

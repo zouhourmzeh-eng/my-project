@@ -45,6 +45,17 @@ export default function DocumentDetailPage() {
 
   const userMap = new Map(users.map((u) => [u.id, u]));
 
+  // ── Role/status helpers ────────────────────────────────────────────────────
+  const isConsultant = user?.role === "consultant";
+  const isAssistant  = user?.role === "assistant";
+  // Document is locked once validated or approved
+  const isLocked     = doc?.status === "validated" || doc?.status === "approved";
+  // Assistant can perform write operations only on draft documents
+  const canAssistantWrite = isAssistant && !isLocked;
+  // Either consultant (always) or assistant on draft
+  const canWrite = isConsultant || canAssistantWrite;
+  // ──────────────────────────────────────────────────────────────────────────
+
   const setStatus = useMutation({
     mutationFn: async (status: Status) => (await api.patch(`/documents/${docId}/status`, { status })).data,
     onSuccess: () => { qc.invalidateQueries({ queryKey: ["doc", docId] }); qc.invalidateQueries({ queryKey: ["versions", docId] }); },
@@ -193,7 +204,8 @@ export default function DocumentDetailPage() {
                 </div>
                 <div className="flex flex-col items-end gap-2">
                   <StatusPill status={doc.status} />
-                  {user?.role === "consultant" && (
+                  {/* Edit / Delete — visible for consultant always, for assistant only on draft */}
+                  {canWrite && (
                     <div className="flex gap-1">
                       <button onClick={startEditing} className="text-xs bg-slate-50 text-slate-600 hover:bg-slate-100 px-2 py-1 rounded border">✎ Edit</button>
                       <button
@@ -205,16 +217,44 @@ export default function DocumentDetailPage() {
                   )}
                 </div>
               </div>
-              {user?.role === "consultant" && (
+
+              {/* ── Lock banner for assistant on validated/approved docs ── */}
+              {isAssistant && isLocked && (
+                <div className="mt-4 flex items-start gap-3 bg-amber-50 border border-amber-200 rounded-lg px-4 py-3">
+                  <span className="text-amber-500 text-lg mt-0.5">🔒</span>
+                  <div>
+                    <p className="text-sm font-medium text-amber-800">
+                      {doc.status === "approved"
+                        ? "Ce document est archivé (approuvé par le consultant)."
+                        : "Ce document a été validé par le consultant."}
+                    </p>
+                    <p className="text-xs text-amber-700 mt-0.5">
+                      Vous ne pouvez plus modifier, supprimer ni analyser ce document. Vous pouvez uniquement télécharger le fichier.
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              {/* ── Status / action buttons — consultant only ── */}
+              {isConsultant && (
                 <div className="mt-4 flex flex-wrap gap-2">
                   <button onClick={() => setStatus.mutate("draft")} className="px-3 py-1.5 text-sm rounded bg-amber-100 text-amber-700 hover:bg-amber-200">Mark draft</button>
                   <button onClick={() => setStatus.mutate("validated")} className="px-3 py-1.5 text-sm rounded bg-blue-100 text-blue-700 hover:bg-blue-200">Validate</button>
-                  <button onClick={() => setStatus.mutate("approved")} className="px-3 py-1.5 text-sm rounded bg-emerald-100 text-emerald-700 hover:bg-emerald-200">Approve</button>
+                  <button onClick={() => setStatus.mutate("approved")} className="px-3 py-1.5 text-sm rounded bg-emerald-100 text-emerald-700 hover:bg-emerald-200">Approve (Archive)</button>
                   {versions.length > 0 && (
                     <button onClick={() => setShowGap(true)} className="px-3 py-1.5 text-sm rounded bg-indigo-600 text-white hover:bg-indigo-700 font-medium flex items-center gap-1 shadow-sm transition-colors ml-auto">
                       🎯 Analyse de Gap
                     </button>
                   )}
+                </div>
+              )}
+
+              {/* ── Gap analysis button for assistant — only on draft + file uploaded ── */}
+              {canAssistantWrite && versions.length > 0 && (
+                <div className="mt-4">
+                  <button onClick={() => setShowGap(true)} className="px-3 py-1.5 text-sm rounded bg-indigo-600 text-white hover:bg-indigo-700 font-medium flex items-center gap-1 shadow-sm transition-colors">
+                    🎯 Analyse de Gap
+                  </button>
                 </div>
               )}
             </>
@@ -224,14 +264,15 @@ export default function DocumentDetailPage() {
         <div className="bg-white rounded-lg shadow-sm border">
           <div className="px-5 py-3 border-b"><h2 className="font-medium">Versions</h2></div>
           <div className="p-5 space-y-3">
-            {user?.role === "consultant" && versions.length === 0 && (
+            {/* Upload form — consultant always, assistant only on draft */}
+            {canWrite && versions.length === 0 && (
               <div className="flex flex-wrap gap-2 items-center bg-slate-50 p-3 rounded">
                 <input className="border rounded px-2 py-1 w-24" value={verNum} onChange={(e) => setVerNum(e.target.value)} placeholder="1.0" />
                 <input className="border rounded px-2 py-1 flex-1 min-w-[160px]" value={verNote} onChange={(e) => setVerNote(e.target.value)} placeholder="Initial version note" />
                 <input ref={versionFile} type="file" onChange={(e) => e.target.files && uploadVersion(e.target.files[0])} className="text-sm" />
               </div>
             )}
-            {user?.role === "consultant" && versions.length > 0 && (
+            {canWrite && versions.length > 0 && (
               <div className="bg-blue-50 border border-blue-100 text-blue-700 p-3 rounded text-sm">
                 A file is already uploaded. Delete it if you want to upload a different one.
               </div>
@@ -241,13 +282,17 @@ export default function DocumentDetailPage() {
               {versions.map((v) => (
                 <li key={v.id} className="py-2 flex items-center justify-between">
                   <div>
-                    <a href={v.file_url} target="_blank" rel="noreferrer" className="font-medium text-brand-700 hover:underline">v{v.version} · {v.file_name}</a>
+                    {/* Download link — always visible for everyone */}
+                    <a href={v.file_url} target="_blank" rel="noreferrer" className="font-medium text-brand-700 hover:underline">
+                      ⬇ v{v.version} · {v.file_name}
+                    </a>
                     {v.note && <div className="text-xs text-slate-500">{v.note}</div>}
                     <div className="text-xs text-slate-400">{new Date(v.created_at).toLocaleString()} · by {userMap.get(v.uploaded_by)?.full_name || "user"}</div>
                   </div>
                   <div className="flex items-center gap-3">
                     <StatusPill status={v.status} />
-                    {user?.role === "consultant" && (
+                    {/* Remove button — consultant always, assistant only on draft */}
+                    {canWrite && (
                       <button
                         onClick={() => { if (confirm("Delete this uploaded file?")) deleteVersion.mutate(v.id); }}
                         className="text-red-500 hover:text-red-700 text-xs">
@@ -271,9 +316,9 @@ export default function DocumentDetailPage() {
             </div>
             {messages.length > 0 && (
               <button
-                onClick={() => { if (confirm(user?.role === "consultant" ? "Clear the entire discussion for EVERYONE? This cannot be undone." : "Clear discussion for your view? The consultant will still see these messages.")) clearChat.mutate(); }}
+                onClick={() => { if (confirm(isConsultant ? "Clear the entire discussion for EVERYONE? This cannot be undone." : "Clear discussion for your view? The consultant will still see these messages.")) clearChat.mutate(); }}
                 className="text-[11px] text-red-600 hover:underline">
-                {user?.role === "consultant" ? "Clear for all" : "Clear my view"}
+                {isConsultant ? "Clear for all" : "Clear my view"}
               </button>
             )}
           </div>
@@ -323,14 +368,15 @@ export default function DocumentDetailPage() {
                 <span key={i} className="inline-flex items-center gap-1 bg-slate-100 text-slate-700 text-xs px-2 py-1 rounded">
                   📎 {f.name}
                   <button type="button" onClick={() => setPendingFiles(pendingFiles.filter((_, j) => j !== i))}
-                    className="ml-1 text-slate-500 hover:text-red-600">×</button>
+                    className="ml-1 text-slate-500 hover:text-red-600">x</button>
                 </span>
               ))}
             </div>
           )}
           <div className="flex gap-2">
             <input value={msg} onChange={(e) => setMsg(e.target.value)} placeholder="Write a message…" className="flex-1 border rounded px-3 py-2" />
-            <label className="cursor-pointer text-sm bg-slate-100 hover:bg-slate-200 px-3 py-2 rounded" title="Attach files">📎
+            <label className="cursor-pointer text-sm bg-slate-100 hover:bg-slate-200 px-3 py-2 rounded" title="Attach files">
+              📎
               <input ref={chatFileInput} type="file" hidden multiple onChange={(e) => {
                 if (e.target.files) setPendingFiles([...pendingFiles, ...Array.from(e.target.files)]);
               }} />

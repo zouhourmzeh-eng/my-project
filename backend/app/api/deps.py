@@ -41,3 +41,4 @@ def require_roles(*roles: UserRole):
 
 
 require_consultant = require_roles(UserRole.consultant)
+require_assistant_or_consultant = require_roles(UserRole.consultant, UserRole.assistant)

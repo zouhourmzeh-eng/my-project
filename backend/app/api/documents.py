@@ -4,7 +4,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.api.deps import get_current_user, require_consultant
+from app.api.deps import get_current_user, require_consultant, require_assistant_or_consultant
 from app.api.projects import _get_project_for_user
 from app.db.base import get_db
 from app.models import Document, DocumentStatus, DocumentVersion, Notification, Process, ProjectMember, User, UserRole
@@ -57,7 +57,7 @@ async def create_document(
     process_id: int,
     payload: DocumentCreate,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(require_consultant),
+    user: User = Depends(require_assistant_or_consultant),
 ):
     res = await db.execute(select(Process).where(Process.id == process_id))
     proc = res.scalar_one_or_none()
@@ -118,10 +118,14 @@ async def add_version(
     file_name: str,
     note: str = "",
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(require_consultant),
+    user: User = Depends(require_assistant_or_consultant),
 ):
     doc = await _get_document_for_user(db, doc_id, user)
-    
+
+    # Block assistant on validated/approved documents
+    if user.role == UserRole.assistant and doc.status in [DocumentStatus.validated, DocumentStatus.approved]:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Ce document a été validé par le consultant. Vous ne pouvez plus y uploader de fichier.")
+
     # Check if a version already exists (restricting to one file as requested)
     res = await db.execute(select(DocumentVersion).where(DocumentVersion.document_id == doc_id))
     if res.scalars().first():
@@ -156,9 +160,14 @@ async def update_document(
     doc_id: int,
     payload: DocumentUpdate,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(require_consultant),
+    user: User = Depends(require_assistant_or_consultant),
 ):
     doc = await _get_document_for_user(db, doc_id, user)
+
+    # Block assistant on validated/approved documents
+    if user.role == UserRole.assistant and doc.status in [DocumentStatus.validated, DocumentStatus.approved]:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Ce document a été validé par le consultant. Vous ne pouvez plus le modifier.")
+
     if payload.title is not None:
         doc.title = payload.title
     if payload.description is not None:
@@ -211,9 +220,13 @@ async def update_document_status(
 async def delete_document(
     doc_id: int,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(require_consultant),
+    user: User = Depends(require_assistant_or_consultant),
 ):
     doc = await _get_document_for_user(db, doc_id, user)
+
+    # Block assistant on validated/approved documents
+    if user.role == UserRole.assistant and doc.status in [DocumentStatus.validated, DocumentStatus.approved]:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Ce document a été validé par le consultant. Vous ne pouvez plus le supprimer.")
     await db.delete(doc)
     await log_action(db, user.id, "delete", "document", doc_id)
     proc_res = await db.execute(select(Process).where(Process.id == doc.process_id))
@@ -230,14 +243,18 @@ async def delete_document(
 async def delete_document_version(
     version_id: int,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(require_consultant),
+    user: User = Depends(require_assistant_or_consultant),
 ):
     res = await db.execute(select(DocumentVersion).where(DocumentVersion.id == version_id))
     v = res.scalar_one_or_none()
     if not v:
         raise HTTPException(404, "Version not found")
-    
+
     doc = await _get_document_for_user(db, v.document_id, user)
+
+    # Block assistant on validated/approved documents
+    if user.role == UserRole.assistant and doc.status in [DocumentStatus.validated, DocumentStatus.approved]:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Ce document a été validé par le consultant. Vous ne pouvez plus supprimer ses fichiers.")
     await db.delete(v)
     
     # Update doc's current version to the next latest one

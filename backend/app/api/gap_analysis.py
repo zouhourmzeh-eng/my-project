@@ -8,10 +8,10 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.api.deps import get_current_user, require_consultant
+from app.api.deps import get_current_user, require_consultant, require_assistant_or_consultant
 from app.api.projects import _get_project_for_user
 from app.db.base import get_db
-from app.models import Project, Document, DocumentVersion, Process, GapAnalysisReport, GapAnalysisItem, Capa, User
+from app.models import Project, Document, DocumentStatus, DocumentVersion, Process, GapAnalysisReport, GapAnalysisItem, Capa, User, UserRole
 from app.services.pdf_extractor import extract_text_from_file
 from app.services.gap_analyzer import analyze_gap_for_documents
 
@@ -155,7 +155,7 @@ async def run_document_gap_analysis(
     document_id: int,
     payload: dict,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(require_consultant),
+    user: User = Depends(require_assistant_or_consultant),
 ):
     """Run Gap Analysis for a single SMQ Document."""
     res_doc = await db.execute(
@@ -166,8 +166,12 @@ async def run_document_gap_analysis(
     doc = res_doc.scalar_one_or_none()
     if not doc:
         raise HTTPException(404, "Document not found")
-    
+
     project = await _get_project_for_user(db, doc.process.project_id, user)
+
+    # Block assistant on validated/approved documents
+    if user.role == UserRole.assistant and doc.status in [DocumentStatus.validated, DocumentStatus.approved]:
+        raise HTTPException(403, "Ce document a été validé par le consultant. Vous ne pouvez plus lancer d'analyse de gap sur ce document.")
     
     target_standards = payload.get("standard")
     if not target_standards:
